@@ -48,8 +48,8 @@
       <define name="AHRS_USE_GPS_HEADING" value="TRUE"/>
     </module>
     <module name="ins" type="extended"/>
-
     <module name="logger_file"/>
+    <module name="rate_identification"/>
 
     <!-- Video/Camera modules -->
     <module name="bebop_cam"/>

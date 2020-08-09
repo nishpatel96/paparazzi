@@ -22,13 +22,13 @@
     <module name="stabilization" type="int_quat"/>
     <module name="ahrs"          type="float_mlkf"/>
     <module name="ins" type="extended"/>
-    
+
     <module name="geo_mag"/>
     <module name="air_data"/>
     <module name="send_imu_mag_current"/>
-    <!--module name="logger_file">
+    <module name="logger_file">
       <define name="FILE_LOGGER_PATH" value="/data/ftp/internal_000"/>
-    </module-->
+    </module>
 
     <module name="bebop_cam"/>
 
@@ -39,6 +39,7 @@
       <define name="VIEWVIDEO_QUALITY_FACTOR" value="40"/>
     </module>
 
+    <module name="rate_identification"/>
     <module name="bebop_ae_awb"/>
   </firmware>
 

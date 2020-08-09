@@ -1,0 +1,16 @@
+<!DOCTYPE module SYSTEM "module.dtd">
+
+<module name="rate_identification">
+  <doc>
+    <description>sys-id for attitude rates of a bebop</description>
+  </doc>
+  <header>
+    <file name="rate_identification.h"/>
+  </header>
+  <init fun="rate_id_init()"/>
+  <periodic fun="rate_id_periodic()" freq="300" autorun="TRUE"/>
+  <makefile>
+    <file name="rate_identification.c"/>
+  </makefile>
+</module>
+
