@@ -31,7 +31,7 @@ let replay_old_log = ref false
 open Printf
 open Latlong
 open Server_globals
-open Aircraft
+open Aircraft_server
 open Quaternion
 (*open Intruder*)
 module U = Unix
@@ -62,14 +62,16 @@ let wind_msg_period = 5000 (* ms *)
 let aircraft_alerts_period = 1000 (* ms *)
 let send_aircrafts_msg = fun _asker _values ->
   assert(_values = []);
-  let names = Compat.bytes_concat "," (Hashtbl.fold (fun k _v r -> k::r) aircrafts []) ^ "," in
+  let names = String.concat "," (Hashtbl.fold (fun k _v r -> k::r) aircrafts []) ^ "," in
   ["ac_list", PprzLink.String names]
 
 
 let expand_aicraft x =
   let ac_name = ExtXml.attrib x "name" in
   try
-    Env.expand_ac_xml x
+    let ac = Aircraft.parse_aircraft ~parse_all:true "" x in
+    if List.length ac.Aircraft.xml > 0 then Xml.Element (Xml.tag x, Xml.attribs x, ac.Aircraft.xml)
+    else failwith "Nothing to parse"
   with Failure msg ->
     begin
       prerr_endline ("A failure occurred while processing aircraft '"^ac_name^"'");
@@ -193,7 +195,7 @@ let send_cam_status = fun a ->
           let utmx = dx *. cos angles.y -. dy *. sin angles.y
           and utmy = dx *. sin angles.y +. dy *. cos angles.y in
             
-          Aircraft.add_pos_to_nav_ref (Geo a.pos) (utmx, utmy) in
+          Aircraft_server.add_pos_to_nav_ref (Geo a.pos) (utmx, utmy) in
     
         let geo_1 = find_point_on_ground tr_rotated
         and geo_2 = find_point_on_ground tl_rotated
@@ -203,7 +205,7 @@ let send_cam_status = fun a ->
         let lats = sprintf "%f,%f,%f,%f," ((Rad>>Deg)geo_1.posn_lat) ((Rad>>Deg)geo_2.posn_lat) ((Rad>>Deg)geo_3.posn_lat) ((Rad>>Deg)geo_4.posn_lat) in  
         let longs = sprintf "%f,%f,%f,%f," ((Rad>>Deg)geo_1.posn_long) ((Rad>>Deg)geo_2.posn_long) ((Rad>>Deg)geo_3.posn_long) ((Rad>>Deg)geo_4.posn_long) in 
         
-        let twgs84 = Aircraft.add_pos_to_nav_ref nav_ref a.cam.target in
+        let twgs84 = Aircraft_server.add_pos_to_nav_ref nav_ref a.cam.target in
         let values = ["ac_id", PprzLink.String a.id;
                       "lats", PprzLink.String lats;
                       "longs", PprzLink.String longs;
@@ -327,7 +329,7 @@ let send_telemetry_status = fun a ->
   (* if no link send anyway for rx_lost_time with special link id *)
   if Hashtbl.length a.link_status = 0 then
     begin
-      let vs = tl_payload "no_id" a.datalink_status (Aircraft.link_status_init ()) in
+      let vs = tl_payload "no_id" a.datalink_status (Aircraft_server.link_status_init ()) in
       Ground_Pprz.message_send my_id "TELEMETRY_STATUS" vs
     end
   else
@@ -479,9 +481,9 @@ let send_aircraft_msg = fun ac ->
 
 (** Check if it is a replayed A/C (c.f. sw/logalizer/play.ml) *)
 let replayed = fun ac_id ->
-  let n = Compat.bytes_length ac_id in
-  if n > 6 && Compat.bytes_sub ac_id 0 6 = "replay" then
-    (true, Compat.bytes_sub ac_id 6 (n - 6), "/var/replay/", ExtXml.parse_file (Env.paparazzi_home // "var/replay/conf/conf.xml"))
+  let n = String.length ac_id in
+  if n > 6 && String.sub ac_id 0 6 = "replay" then
+    (true, String.sub ac_id 6 (n - 6), "/var/replay/", ExtXml.parse_file (Env.paparazzi_home // "var/replay/conf/conf.xml"))
   else
     (false, ac_id, "", conf_xml)
 
@@ -509,7 +511,7 @@ let check_md5sum = fun ac_name alive_md5sum aircraft_conf_dir ->
     match alive_md5sum with
         PprzLink.Array array ->
           let n = Array.length array in
-          assert(n = Compat.bytes_length md5sum / 2);
+          assert(n = String.length md5sum / 2);
           for i = 0 to n - 1 do
             let x = int_of_string (sprintf "0x%c%c" md5sum.[2*i] md5sum.[2*i+1]) in
             assert (x = PprzLink.int_of_value array.(i))
@@ -520,7 +522,7 @@ let check_md5sum = fun ac_name alive_md5sum aircraft_conf_dir ->
       match alive_md5sum with
           PprzLink.Array array ->
             let n = Array.length array in
-            assert(n = Compat.bytes_length md5sum / 2);
+            assert(n = String.length md5sum / 2);
             for i = 0 to n - 1 do
               let x = 0 in
               assert (x = PprzLink.int_of_value array.(i))
@@ -555,15 +557,18 @@ let new_aircraft = fun get_alive_md5sum real_id ->
   if not is_replayed then
     check_md5sum real_id (get_alive_md5sum ()) aircraft_conf_dir;
 
-  let ac = Aircraft.new_aircraft real_id ac_name xml_fp airframe_xml in
+  let ac = Aircraft_server.new_aircraft real_id ac_name xml_fp airframe_xml in
   let update = fun () ->
     for i = 0 to Array.length ac.svinfo - 1 do
       ac.svinfo.(i).age <-  ac.svinfo.(i).age + 1;
     done in
 
   ignore (ac.ap_modes <- try
-    let (ap_file, _) = Gen_common.get_autopilot_of_airframe airframe_xml in
-    Some (modes_from_autopilot (ExtXml.parse_file ap_file))
+    let ac = Aircraft.parse_aircraft "" airframe_xml in
+    match ac.Aircraft.autopilots with
+    | None -> None
+    | Some [(_, ap)] -> Some (modes_from_autopilot ap.Autopilot.xml)
+    | _ -> None (* more than one *)
   with _ -> None);
 
   ignore (Glib.Timeout.add 1000 (fun _ -> update (); true));
@@ -830,11 +835,11 @@ let jump_block = fun logging _sender vs ->
 (** Got a RAW_DATALINK, send its contents *)
 let raw_datalink = fun logging _sender vs ->
   let ac_id = PprzLink.string_assoc "ac_id" vs
-  and m = PprzLink.string_assoc "message" vs in
-  for i = 0 to Compat.bytes_length m - 1 do
-    if m.[i] = ';' then Compat.bytes_set m i ' '
+  and m = Bytes.of_string (PprzLink.string_assoc "message" vs) in
+  for i = 0 to Bytes.length m - 1 do
+    if Bytes.get m i = ';' then Bytes.set m i ' '
   done;
-  let msg_id, vs = Dl_Pprz.values_of_string m in
+  let msg_id, vs = Dl_Pprz.values_of_string (Bytes.to_string m) in
   let msg = Dl_Pprz.message_of_id msg_id in
   Dl_Pprz.message_send dl_id msg.PprzLink.name vs;
   log logging ac_id msg.PprzLink.name vs
@@ -846,7 +851,7 @@ let link_report = fun logging _sender vs ->
   try
     let ac = Hashtbl.find aircrafts ac_id in
     let link_status = {
-      Aircraft.rx_lost_time = PprzLink.int_assoc "rx_lost_time" vs;
+      Aircraft_server.rx_lost_time = PprzLink.int_assoc "rx_lost_time" vs;
       rx_bytes = PprzLink.int_assoc "rx_bytes" vs;
       rx_msgs = PprzLink.int_assoc "rx_msgs" vs;
       rx_bytes_rate = PprzLink.float_assoc "rx_bytes_rate" vs;
